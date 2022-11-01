@@ -8,6 +8,9 @@ default_hyperfoil_server_url="hyperfoil-cluster-hyperfoil.${cluster_domain}"
 export HYPERFOIL_SERVER_URL=${HYPERFOIL_SERVER_URL:-${default_hyperfoil_server_url}}
 export KNATIVE_MANIFESTS=${KNATIVE_MANIFESTS-$default_manifests}
 export SKIP_DELETE_RESOURCES=${SKIP_DELETE_RESOURCES:-false}
+export CONFIGURE_MACHINE=${CONFIGURE_MACHINE:-true}
+export SCALE_UP_DATAPLANE=${SCALE_UP_DATAPLANE:-true}
+export SCALE_UP_TEST_DEPLOYMENT=${SCALE_UP_TEST_DEPLOYMENT:-true}
 export SKIP_CREATE_TEST_RESOURCES=${SKIP_CREATE_TEST_RESOURCES:-false}
 export TEST_CASE_NAMESPACE=${TEST_CASE_NAMESPACE-"perf-test"}
 export WORKER_ONE=${WORKER_ONE:-node-role.kubernetes.io/worker=""}
@@ -50,13 +53,14 @@ function delete_namespaces {
 }
 
 function apply_manifests() {
-  oc apply -f tests/custom-pidslimit.yaml || return $?
-  oc label machineconfigpools.machineconfiguration.openshift.io worker custom-crio=custom-pidslimit --overwrite
-  oc wait machineconfigpools.machineconfiguration.openshift.io worker --timeout=30m --for=condition=Updated=True
+  if ${CONFIGURE_MACHINE}; then
+    oc apply -f tests/custom-pidslimit.yaml || return $?
+    oc label machineconfigpools.machineconfiguration.openshift.io worker custom-crio=custom-pidslimit --overwrite
+    oc wait machineconfigpools.machineconfiguration.openshift.io worker --timeout=30m --for=condition=Updated=True
 
-  scale_machineset "${NUM_WORKER_NODES}" || return $?
-
-  oc wait machineconfigpools.machineconfiguration.openshift.io worker --timeout=30m --for=condition=Updated=True
+    scale_machineset "${NUM_WORKER_NODES}" || return $?
+    oc wait machineconfigpools.machineconfiguration.openshift.io worker --timeout=30m --for=condition=Updated=True
+  fi
 
   create_namespaces || return $?
 
@@ -116,8 +120,10 @@ EOF
   oc patch deployment -n knative-eventing kafka-broker-dispatcher --patch-file installation/patches/kafka-broker-dispatcher.yaml
   oc patch deployment -n knative-eventing kafka-broker-receiver --patch-file installation/patches/kafka-broker-receiver.yaml
 
-  scale_deployment "kafka-broker-dispatcher" 3 || return $?
-  scale_deployment "kafka-broker-receiver" 2 || return $?
+  if ${SCALE_UP_DATAPLANE}; then
+    scale_deployment "kafka-broker-dispatcher" 3 || return $?
+    scale_deployment "kafka-broker-receiver" 2 || return $?
+  fi
 
   if ${SKIP_CREATE_TEST_RESOURCES}; then
     return 0
@@ -139,7 +145,9 @@ function run() {
   #     modified; please apply your changes to the latest version and try again
   apply_test_resources || apply_test_resources || return $?
 
-  scale_deployment "$(oc get deploy -n perf-test | tail -n 1 | awk '{print $1}')" 10 "${TEST_CASE_NAMESPACE}"
+  if ${SCALE_UP_TEST_DEPLOYMENT}; then
+    scale_deployment "$(oc get deploy -n perf-test | tail -n 1 | awk '{print $1}')" 10 "${TEST_CASE_NAMESPACE}"
+  fi
 
   # Wait for all possible resources to be ready
   wait_for_resources_to_be_ready "brokers.eventing.knative.dev" || return $?
@@ -168,6 +176,135 @@ function run() {
 
   # Run benchmark
   "$(dirname "${BASH_SOURCE[0]}")"/run_benchmark.py || return $?
+}
+
+function create_kafka_secrets() {
+  echo "Applying Strimzi TLS Admin user"
+  cat <<-EOF | oc apply -f -
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaUser
+metadata:
+  name: my-tls-user
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: my-cluster
+spec:
+  authentication:
+    type: tls
+  authorization:
+    type: simple
+    acls:
+      # Example ACL rules for consuming from a topic.
+      - resource:
+          type: topic
+          name: "*"
+        operation: Read
+        host: "*"
+      - resource:
+          type: topic
+          name: "*"
+        operation: Describe
+        host: "*"
+      - resource:
+          type: group
+          name: "*"
+        operation: Read
+        host: "*"
+      # Example ACL rules for producing to a topic.
+      - resource:
+          type: topic
+          name: "*"
+        operation: Write
+        host: "*"
+      - resource:
+          type: topic
+          name: "*"
+        operation: Create
+        host: "*"
+      - resource:
+          type: topic
+          name: "*"
+        operation: Describe
+        host: "*"
+      # Required ACL rule to be able to delete topics
+      - resource:
+          type: topic
+          name: "*"
+        operation: Delete
+        host: "*"
+EOF
+
+  echo "Applying Strimzi SASL Admin User"
+  cat <<-EOF | oc apply -f -
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaUser
+metadata:
+  name: my-sasl-user
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: my-cluster
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      # Example ACL rules for consuming from knative-messaging-kafka using consumer group my-group
+      - resource:
+          type: topic
+          name: "*"
+        operation: Read
+        host: "*"
+      - resource:
+          type: topic
+          name: "*"
+        operation: Describe
+        host: "*"
+      - resource:
+          type: group
+          name: "*"
+        operation: Read
+        host: "*"
+      # Example ACL rules for producing to topic knative-messaging-kafka
+      - resource:
+          type: topic
+          name: "*"
+        operation: Write
+        host: "*"
+      - resource:
+          type: topic
+          name: "*"
+        operation: Create
+        host: "*"
+      - resource:
+          type: topic
+          name: "*"
+        operation: Describe
+        host: "*"
+      # Required ACL rule to be able to delete topics
+      - resource:
+          type: topic
+          name: "*"
+        operation: Delete
+        host: "*"
+EOF
+
+  echo "Waiting for Strimzi admin users to become ready"
+  oc wait kafkauser --all --timeout=-1s --for=condition=Ready -n kafka
+
+  echo "Creating a Secret, containing TLS from Strimzi"
+  STRIMZI_CRT=$(oc -n kafka get secret my-cluster-cluster-ca-cert --template='{{index .data "ca.crt"}}' | base64 --decode )
+  TLSUSER_CRT=$(oc -n kafka get secret my-tls-user --template='{{index .data "user.crt"}}' | base64 --decode )
+  TLSUSER_KEY=$(oc -n kafka get secret my-tls-user --template='{{index .data "user.key"}}' | base64 --decode )
+  SASL_PASSWD=$(oc -n kafka get secret my-sasl-user --template='{{index .data "password"}}' | base64 --decode )
+
+  oc create secret --namespace "${TEST_CASE_NAMESPACE}" generic strimzi-sasl-plain-secret \
+      --from-literal=password="$SASL_PASSWD" \
+      --from-literal=user="my-sasl-user" \
+      --from-literal=protocol="SASL_PLAINTEXT" \
+      --from-literal=sasl.mechanism="SCRAM-SHA-512" \
+      --from-literal=saslType="SCRAM-SHA-512" \
+      --dry-run=client -o yaml | oc apply -n "${TEST_CASE_NAMESPACE}" -f -
 }
 
 function scale_machineset() {

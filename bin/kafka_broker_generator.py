@@ -21,6 +21,11 @@ parser.add_argument('--sla-mean-response-time-sec', type=int, default=70, dest='
                     help='Mean response time in seconds')
 parser.add_argument('--sla-p999-response-time-sec', type=int, default=90, dest='sla_p999_response_time_sec',
                     help='P999 response time in seconds')
+parser.add_argument('--secret-name', type=str, default=None, dest='secret_name', help='auth.secret.ref.name')
+parser.add_argument('--bootstrap.servers', type=str, default="my-cluster-kafka-bootstrap.kafka:9092",
+                    dest='bootstrap_servers', help='bootstrap.servers')
+parser.add_argument('--replication-factor', type=int, default=3,
+                    dest='replication_factor', help='default.topic.replication.factor')
 args = parser.parse_args()
 
 triggers = []
@@ -30,6 +35,8 @@ os.makedirs(args.hf_output_dir, mode=0o777, exist_ok=True)
 os.makedirs(args.resources_output_dir, mode=0o777, exist_ok=True)
 
 serviceName = args.name_prefix + "-svc"
+
+secret_config = f"auth.secret.ref.name: {args.secret_name}" if args.secret_name else ""
 
 for b_idx in range(args.num_brokers):
     broker_name = f"{args.name_prefix}-{b_idx}"
@@ -42,8 +49,9 @@ metadata:
   name: {broker_name}-config
 data:
   default.topic.partitions: "{args.num_partitions}"
-  default.topic.replication.factor: "3"
-  bootstrap.servers: my-cluster-kafka-bootstrap.kafka:9092
+  default.topic.replication.factor: "{args.replication_factor}"
+  bootstrap.servers: {args.bootstrap_servers}
+  {secret_config}
 ---
 apiVersion: eventing.knative.dev/v1
 kind: Broker
@@ -186,7 +194,7 @@ spec:
       - name: config
         configMap:
           name: config-sacura
- 
+
 """
         filename = f"{args.resources_output_dir}/{trigger_name}.yaml"
         print(f"Saving file {filename}")
@@ -261,7 +269,7 @@ staircase:
   maxSessions: 20000
   rampUpDuration: 120s
   scenario:
-  {scenarios}
+{scenarios}
 """
 
 with open(f"{args.hf_output_dir}/hf.yaml", "w") as f:
