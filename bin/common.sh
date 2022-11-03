@@ -75,7 +75,9 @@ function apply_manifests() {
     wait_for_operators_to_be_running || return $?
   done
 
-  wait_for_workloads_to_be_running || exit 1
+  wait_until_pods_running "kafka" || return $?
+  wait_until_pods_running "knative-eventing" || return $?
+  wait_until_pods_running "hyperfoil" || return $?
 }
 
 function delete_manifests() {
@@ -131,7 +133,7 @@ EOF
 
   oc apply -n "${TEST_CASE_NAMESPACE}" -f "${TEST_CASE}/resources" || return $?
 
-  wait_for_workloads_to_be_running || return $?
+  wait_until_pods_running "knative-eventing" || return $?
 }
 
 function run() {
@@ -157,7 +159,7 @@ function run() {
   wait_for_resources_to_be_ready "kafkachannels.messaging.knative.dev" || return $?
   wait_for_resources_to_be_ready "kafkasources.sources.knative.dev" || return $?
 
-  wait_for_workloads_to_be_running || return $?
+  wait_until_pods_running "knative-eventing" || return $?
   wait_until_pods_running "${TEST_CASE_NAMESPACE}" || return $?
 
   # Inject additional env variables for test case specific configurations.
@@ -345,13 +347,6 @@ function wait_for_operators_to_be_running() {
     awk '{print $1}' | # Extract resource name
     tail -n +2 |       # skip header
     xargs -I{} oc wait csv -n openshift-operators {} --timeout 300s --for=jsonpath='{.status.phase}'=Succeeded || return $?
-}
-
-function wait_for_workloads_to_be_running() {
-  echo "Waiting for pods to be running"
-  wait_until_pods_running "kafka" || return $?
-  wait_until_pods_running "knative-eventing" || return $?
-  wait_until_pods_running "hyperfoil" || return $?
 }
 
 # Copied from https://github.com/knative/hack/blob/0456e8bf65476e200785565da7c19382e271cae2/library.sh#L215-L265
