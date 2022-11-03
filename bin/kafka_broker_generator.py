@@ -26,6 +26,16 @@ parser.add_argument('--bootstrap.servers', type=str, default="my-cluster-kafka-b
                     dest='bootstrap_servers', help='bootstrap.servers')
 parser.add_argument('--replication-factor', type=int, default=3,
                     dest='replication_factor', help='default.topic.replication.factor')
+parser.add_argument('--external-topic', type=str, default=None,
+                    dest='external_topic', help='External topic name')
+parser.add_argument('--initial-ramp-up-duration', type=int, default=60,
+                    dest='initial_ramp_up_duration', help='initialRampUpDuration in sec')
+parser.add_argument('--ramp-up-duration', type=int, default=120,
+                    dest='ramp_up_duration', help='ramp_up_duration in sec')
+parser.add_argument('--steady_state-duration', type=int, default=300,
+                    dest='steady_state_duration', help='steady_state_duration in sec')
+parser.add_argument('--max-iterations', type=int, default=5,
+                    dest='max_iterations', help='max_iterations')
 args = parser.parse_args()
 
 triggers = []
@@ -37,6 +47,7 @@ os.makedirs(args.resources_output_dir, mode=0o777, exist_ok=True)
 serviceName = args.name_prefix + "-svc"
 
 secret_config = f"auth.secret.ref.name: {args.secret_name}" if args.secret_name else ""
+external_topic_config = f"kafka.eventing.knative.dev/external.topic: {args.external_topic}" if args.external_topic else ""
 
 for b_idx in range(args.num_brokers):
     broker_name = f"{args.name_prefix}-{b_idx}"
@@ -58,6 +69,7 @@ kind: Broker
 metadata:
   annotations:
     eventing.knative.dev/broker.class: Kafka
+    {external_topic_config}
   name: {broker_name}
 spec:
   # Configuration specific to this broker.
@@ -261,13 +273,13 @@ http:
   host: ${{HTTP_HOST}}
   sharedConnections: 21000
 staircase:
-  initialRampUpDuration: 60s
+  initialRampUpDuration: {args.initial_ramp_up_duration}s
   initialUsersPerSec: {args.initial_users_per_sec}
   incrementUsersPerSec: {args.increment_users_per_sec}
-  steadyStateDuration: 300s
-  maxIterations: 5
+  steadyStateDuration: {args.steady_state_duration}s
+  maxIterations: {args.max_iterations}
   maxSessions: 20000
-  rampUpDuration: 120s
+  rampUpDuration: {args.ramp_up_duration}s
   scenario:
 {scenarios}
 """
