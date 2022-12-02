@@ -17,18 +17,18 @@ make test-kafka-broker-midstream-nightly
 
 # Deploy requirements (Kafka, Serverless, Hyperfoil) from products and run a specific test
 export SKIP_DELETE_RESOURCES=true
-TEST_CASE=tests/broker/kafka/p1-r1-ord-b1-t1-32kb ./bin/run_midstream_nightly.sh
+TEST_CASE=tests/broker/kafka/p10-r3-ord-b10-t10-64kb ./bin/run_midstream_nightly.sh
 
 # Run a specific test using an existing Serverless or Knative installation
 export SKIP_DELETE_RESOURCES=true
-TEST_CASE=tests/broker/kafka/p1-r1-ord-b1-t1-32kb ./bin/run_test.sh
+TEST_CASE=tests/broker/kafka/p10-r3-ord-b10-t10-64kb ./bin/run_test.sh
 
 # Run quick smoke test if requirements are already installed
 export CONFIGURE_MACHINE=false
 export SCALE_UP_DATAPLANE=false
 export SCALE_UP_TEST_DEPLOYMENT=false
 export SKIP_DELETE_RESOURCES=true
-TEST_CASE=tests/broker/kafka/p1-r3-unord-b1-t1-64kb ./bin/run_test.sh
+TEST_CASE=tests/broker/kafka/p10-r3-ord-b10-t10-64kb ./bin/run_test.sh
 ```
 
 ## Interpreting test results
